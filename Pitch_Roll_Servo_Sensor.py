@@ -16,8 +16,8 @@ GPIO.setup(PITCH_SERVO_PIN, GPIO.OUT)
 # Initialize PWM for servos
 roll_servo = GPIO.PWM(ROLL_SERVO_PIN, 50) # 50 Hz frequency
 pitch_servo = GPIO.PWM(PITCH_SERVO_PIN, 50) # 50 Hz frequency
-roll_servo.start(0)
-pitch_servo.start(0)
+roll_servo.start(7.2) #7.2
+pitch_servo.start(3.5) #3.5
 
 # MPU6050 I2C address
 MPU = 0x68
@@ -41,13 +41,16 @@ roll, pitch, yaw = 0.0, 0.0, 0.0
 AccErrorX, AccErrorY = 0.0, 0.0
 GyroErrorX, GyroErrorY, GyroErrorZ = 0.0, 0.0, 0.0
 
-# Servo stabilization parameters
-DEADBAND_WIDTH = 5.0  # Width of the deadband in degrees
-P_GAIN = 0.05  # Proportional gain for servo control
+# Set the deadband width, proportional gains, and reset interval
+DEADBAND_WIDTH = 0.5  # Adjust as needed
+PITCH_GAIN = 0.05  # Adjust as needed
+ROLL_GAIN = 0.05  # Adjust as needed
 RESET_INTERVAL = 5  # Reset gyroAngleX and gyroAngleY every 5 seconds
+ANGULAR_VELOCITY_THRESHOLD = 0.5  # Adjust as needed
 
-# Initialize variables for gyroAngle reset
+# Initialize variables for gyroAngle reset and angular velocity tracking
 last_reset_time = time.time()
+last_angular_velocity = 0.0
 
 # Initialize the I2C bus
 bus = smbus.SMBus(1)
@@ -110,7 +113,7 @@ def read_IMU_data():
     GyroZ = read_word_2c(GYRO_XOUT_H + 4) / GYRO_SENSITIVITY
 
 def complementary_filter():
-    global roll, pitch, yaw, gyroAngleX, gyroAngleY, gyroAngleZ, last_reset_time
+    global roll, pitch, yaw, gyroAngleX, gyroAngleY, gyroAngleZ, last_reset_time, last_angular_velocity
     if AccX != 0 or AccZ != 0:  
         accAngleX = math.atan(AccY / math.sqrt(AccX**2 + AccZ**2)) * 180 / math.pi - 0.58
     else:
@@ -125,44 +128,62 @@ def complementary_filter():
     elapsed_time_since_reset = current_time - last_reset_time
 
     # Reset gyroAngleX and gyroAngleY periodically
-    if elapsed_time_since_reset >= RESET_INTERVAL:
-        gyroAngleX = 0
-        gyroAngleY = 0
-        last_reset_time = current_time
+    #if elapsed_time_since_reset >= RESET_INTERVAL:
+     #   gyroAngleX = 3.5
+    #    gyroAngleY = 7.2
+   #     last_reset_time = current_time
 
     gyroAngleX += GyroX * elapsedTime
     gyroAngleY += GyroY * elapsedTime
     yaw += GyroZ * elapsedTime
+    # Calculate angular velocity
+    angular_velocity = math.sqrt(GyroX**2 + GyroY**2 + GyroZ**2)
 
-    roll = 0.96 * gyroAngleX + 0.04 * accAngleX
-    pitch = 0.96 * gyroAngleY + 0.04 * accAngleY
+    # If angular velocity is below threshold, consider the board stationary and keep pitch and roll values constant
+    if angular_velocity < ANGULAR_VELOCITY_THRESHOLD:
+        pitch = last_angular_velocity if abs(last_angular_velocity) < DEADBAND_WIDTH else 0.0
+        roll = pitch
+    else:
+        # Calculate pitch and roll using complementary filter with different gains
+        gyroAngleX = 0.90 * gyroAngleX + 0.04 * accAngleX
+        gyroAngleY = 0.96 * gyroAngleY + 0.04 * accAngleY
+        roll = gyroAngleX
+        pitch = gyroAngleY
+        #time.sleep(100)
+        
+
+    # Store current angular velocity for next iteration
+    last_angular_velocity = angular_velocity
 
     # Apply deadband to roll and pitch
     if abs(roll) < DEADBAND_WIDTH:
         roll = 0.0
     if abs(pitch) < DEADBAND_WIDTH:
         pitch = 0.0
+        
+    # Limit maximum roll value
+    #MAX_ROLL_ANGLE = 10.0  # Adjust as needed
+    #if (roll) > MAX_ROLL_ANGLE:
+    #    roll = 0
 
-    # Apply proportional control to stabilize the servo
-    roll_duty_cycle = 7.5 + P_GAIN * roll
-    pitch_duty_cycle = 7.5 + P_GAIN * pitch
+    # Apply proportional control to stabilize the servos with different gains
+    roll_duty_cycle = 7.5 + ROLL_GAIN * roll
+    pitch_duty_cycle = 7.5 + PITCH_GAIN * pitch
 
     # Limit duty cycle to avoid extreme positions
-    roll_duty_cycle = max(2.5, min(roll_duty_cycle, 12.5))
-    pitch_duty_cycle = max(2.5, min(pitch_duty_cycle, 12.5))
+    roll_duty_cycle = max(5.5, min(roll_duty_cycle, 8.2))
+    pitch_duty_cycle = max(2.5, min(pitch_duty_cycle, 6.0))
 
     # Set servo positions
     roll_servo.ChangeDutyCycle(roll_duty_cycle)
-    pitch_servo.ChangeDutyCycle(pitch_duty_cycle)
-
-# Rest of your code here...
+    #pitch_servo.ChangeDutyCycle(pitch_duty_cycle)
 
 # Initialize MPU6050
 setup_MPU()
 calculate_IMU_error()
 
 # Initialize gyro angle variables
-gyroAngleX, gyroAngleY, gyroAngleZ = 0.0, 0.0, 0.0
+gyroAngleX, gyroAngleY, gyroAngleZ = 3.5, 7.2, 0.0
 
 # Variables for timing
 previousTime = time.time()
@@ -177,6 +198,5 @@ while True:
     complementary_filter()
     print("Roll:", roll)
     print("Pitch:", pitch)
-    time.sleep(0.1)  # Add a small delay to avoid excessive computation and servo jitter
-
+    time.sleep(0.2)  # Add a small delay to avoid excessive computation and servo jitter
 
